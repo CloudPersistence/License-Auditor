@@ -1,99 +1,142 @@
-CloudPersistence License Auditor — Microsoft 365 license waste audit
-A read-only PowerShell tool that connects to Microsoft Graph and produces a
-local HTML report showing where a tenant is wasting money on M365 licenses.
-It detects three high-confidence sources of waste:
-Shelfware — paid licenses that are purchased but not assigned.
-Disabled users with licenses — departed accounts still consuming paid seats.
-Inactive users — licensed users with no sign-in for N+ days (requires Entra ID P1/P2).
-No tenant data ever leaves the machine it runs on. Nothing is written back to
-the tenant — the tool only reads.
+# CloudPersistence License Auditor
+
+A read-only PowerShell tool that audits Microsoft 365 license waste and generates a local HTML report.
+
+**What it finds:**
+
+- **Shelfware** — paid licenses that are purchased but never assigned to anyone
+- **Disabled users with licenses** — departed employees still consuming paid seats
+- **Inactive users** — licensed users with no sign-in for 90+ days *(requires Entra ID P1/P2)*
+
+No data leaves your machine. Nothing is written back to the tenant.
+
 ---
-Requirements
-PowerShell 7+ (recommended) or Windows PowerShell 5.1.
-Microsoft Graph PowerShell modules:
+
+## Quick start
+
 ```powershell
-  Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Users, Microsoft.Graph.Identity.DirectoryManagement -Scope CurrentUser
-  ```
-An account that can read the tenant. `Global Reader` is enough to read
-the data. Note: the first time the "Microsoft Graph Command Line Tools" app is
-used in a tenant, an account that can grant admin consent (Global
-Administrator, Privileged Role Administrator, or Cloud Application
-Administrator) may be required once. After that, Global Reader works.
-The scopes requested are all read-only:
-`Organization.Read.All`, `User.Read.All`, `Directory.Read.All`, `AuditLog.Read.All`.
+# Install Graph modules (once)
+Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Users, Microsoft.Graph.Identity.DirectoryManagement -Scope CurrentUser
+
+# Run the audit
+.\Invoke-CPLicenseAuditor.ps1
+```
+
+The script opens a browser for interactive sign-in, asks for currency and prices on first run, then generates an HTML report.
+
 ---
-How to run
+
+## Requirements
+
+| Requirement | Details |
+|---|---|
+| PowerShell | 7+ recommended, or Windows PowerShell 5.1 |
+| Modules | `Microsoft.Graph.Authentication`, `.Users`, `.Identity.DirectoryManagement` |
+| Role | **Global Reader** (read-only) |
+| First-time consent | May require admin consent once per tenant for "Microsoft Graph Command Line Tools" |
+
+**Scopes requested** (all read-only): `Organization.Read.All`, `User.Read.All`, `Directory.Read.All`, `AuditLog.Read.All`
+
+---
+
+## Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `-InactiveDays` | `90` | Days without sign-in before flagging a user |
+| `-OutputFolder` | Current directory | Where to save the HTML report |
+| `-PriceFile` | `CPLicenseAuditor-prices.json` | Path to the JSON price file |
+| `-PriceSource` | *(prompted)* | Label for the report footer, e.g. `"Invoice 2026-05"` |
+| `-UseListPrices` | Off | Skip prompts, use built-in USD list-price estimates |
+| `-NonInteractive` | Off | Skip prompts, use only what's in the price file |
+| `-NoOpen` | Off | Don't auto-open the report in the browser |
+
+**Examples:**
+
 ```powershell
-# Interactive (default): asks currency + price source + a price per tenant SKU
+# Interactive (default)
 .\Invoke-CPLicenseAuditor.ps1
 
-# Different inactivity threshold and output folder
-.\Invoke-CPLicenseAuditor.ps1 -InactiveDays 60 -OutputFolder "C:\Reports"
-
-# No prompts: fill missing prices from the built-in USD hints (rough)
+# Quick run with built-in USD estimates (no prompts)
 .\Invoke-CPLicenseAuditor.ps1 -UseListPrices
 
-# No prompts: use only what's already in the price file (rest shown as n/a)
-.\Invoke-CPLicenseAuditor.ps1 -NonInteractive
+# Per-client price file + custom source label
+.\Invoke-CPLicenseAuditor.ps1 -PriceFile "C:\Clients\ClientA\prices.json" -PriceSource "EA invoice Q2-2026"
 
-# Per-client price file + an explicit source label
-.\Invoke-CPLicenseAuditor.ps1 -PriceFile "C:\Clients\EHL\prices.json" -PriceSource "Invoice 2026-05"
+# Different inactivity threshold
+.\Invoke-CPLicenseAuditor.ps1 -InactiveDays 60
 ```
-On the first run the tool asks for the currency, a price source label (free
-text, shown in the report footer), and a monthly price for each SKU the tenant
-actually has. Answers are saved to `CPLicenseAuditor-prices.json` so later runs are
-prompt-free. Prices accept either comma or dot as the decimal separator.
+
 ---
-Where do the prices come from?
-Microsoft Graph tells you how many licenses exist and how many are assigned,
-but not how much they cost — price is contractual data that is not exposed
-through Graph. You provide the price. Where you find the real figure depends on
-how the tenant buys its licenses.
-Step 0 — identify the billing channel.
-In the Microsoft 365 admin center go to Billing → Billing accounts and check
-the account type:
-Account type	What it means	Where the price lives
-MOSA (Microsoft Online Subscription Agreement)	Bought directly, self-service	Admin center (see below)
-MCA (Microsoft Customer Agreement), direct	Bought direct from Microsoft / via rep	Admin center (see below)
-MCA via partner / CSP	A partner resells and bills the customer	Partner invoice (not the admin center)
-If the tenant buys directly (MOSA / MCA direct):
-`Billing → Your products` → price per subscription / seat.
-`Billing → Bills & payments` (Invoices) → the actual invoiced price. This
-is the most accurate source — real amount, real currency, discounts applied.
-If the tenant is on CSP (partner/reseller):
-The real price is not shown in the customer's admin center. In CSP the
-partner sets the price and bills the customer.
-Get the figure from the partner's invoice. If you (the operator) are the
-CSP partner, the prices are in your Partner Center price sheet for the
-customer's market — you don't need the customer's admin center at all.
-Two normalisation rules so the numbers are consistent:
-Monthly vs annual. A monthly term is ~20% more expensive per month than an
-annual commitment. Enter all prices on the same basis (monthly is recommended).
-Exclude VAT. Microsoft commercial pricing is quoted excluding tax (except
-AU/BR). Use the net price, not the tax-inclusive line on an invoice.
-Record what you used in the price source label (e.g. `Invoice 2026-05`,
-`CSP price sheet DE (EUR)`, `Manual estimate`). It appears in the report footer
-so anyone reading the report knows how solid the savings figures are.
+
+## Where do the prices come from?
+
+Microsoft Graph returns *how many* licenses exist and *how many* are assigned, but **not how much they cost**. You provide the price. On first run the script prompts you for each SKU it finds, with a rough USD hint as reference.
+
+Where to find the real price depends on how the tenant buys licenses:
+
+### Step 1 — Identify the billing channel
+
+Go to **Admin center → Billing → Billing accounts** and check the account type.
+
+| Account type | Meaning |
+|---|---|
+| **MOSA** | Bought directly from Microsoft (self-service) |
+| **MCA direct** | Bought direct from Microsoft or via a rep |
+| **MCA via partner / CSP** | A partner resells and bills the customer |
+
+### Step 2 — Find the price
+
+**Direct purchase (MOSA / MCA direct):**
+- `Billing → Your products` → price per subscription
+- `Billing → Bills & payments` → invoiced price *(most accurate — includes discounts)*
+
+**CSP (partner/reseller):**
+- The price is on the **partner's invoice**, not in the customer's admin center
+- If *you* are the CSP partner, check your Partner Center price sheet for the customer's market
+
+### Normalisation rules
+
+- **Monthly vs annual:** monthly terms are ~20% more expensive per month. Enter all prices on the same basis (monthly recommended).
+- **Exclude VAT:** Microsoft commercial pricing excludes tax (except AU/BR). Use the net price.
+
 ---
-Output
-A self-contained HTML file (`CPLicenseAuditor-Report-<timestamp>.html`) written to the
-output folder and opened in the default browser. It contains:
-Summary cards: estimated monthly spend, shelfware cost, disabled-user cost,
-total recoverable per month.
-License utilisation by plan.
-Shelfware table (paid but unassigned).
-Licenses on disabled accounts.
-Inactive licensed users (or an N/A notice if the tenant has no Entra ID P1).
+
+## Multi-client workflow
+
+Keep a folder per client with its own price file:
+
+```
+C:\Clients\
+├── ClientA\
+│   └── prices.json      # CHF, negotiated EA prices
+├── ClientB\
+│   └── prices.json      # EUR, CSP partner prices
+└── ClientC\
+    └── prices.json      # USD, direct purchase
+```
+
+```powershell
+.\Invoke-CPLicenseAuditor.ps1 `
+    -PriceFile "C:\Clients\ClientA\prices.json" `
+    -PriceSource "EA invoice Q2-2026" `
+    -OutputFolder "C:\Clients\ClientA"
+```
+
 ---
-Known limitations
-Inactive users need Entra ID P1/P2. Without it, Graph rejects the
-`signInActivity` query entirely; the tool detects this, retries without it,
-and marks that section N/A.
-Prices are only as good as what you enter. Any SKU with no price is shown
-as `n/a` rather than guessed.
-Feature-level downgrades (e.g. E5 → E3) are not in this version. That
-analysis depends on per-user usage reports, which are de-identified by default
-in the tenant (`Reports` setting "Display concealed user, group, and site
-names"). It is planned as a later iteration.
+
+## Known limitations
+
+- **Inactive users require Entra ID P1/P2.** Without it, Graph rejects the `signInActivity` query. The tool detects this, retries without it, and marks the section as N/A.
+- **Prices are only as good as what you enter.** Unknown SKUs show `n/a` instead of guessing.
+- **Feature-level downgrades** (e.g. E5 → E3 based on actual feature usage) are planned for a future version.
+
 ---
-Powered by cloudpersistence.com
+
+## License
+
+MIT
+
+---
+
+Powered by [cloudpersistence.com](https://www.cloudpersistence.com)
